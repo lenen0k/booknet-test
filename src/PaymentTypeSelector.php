@@ -1,7 +1,13 @@
 <?php
 namespace App;
 
+use App\Enums\LangTypes;
+use App\Enums\PaymentMethodCountryMode;
+use App\Enums\ProductTypes;
+use App\Enums\UserOsTypes;
+
 class PaymentTypeSelector {
+    const ES_MIN_AMOUNT = 0.3;
     public function __construct(
         private string $productType,
         private float $amount,
@@ -12,25 +18,18 @@ class PaymentTypeSelector {
     ) {}
 
     public function getButtons(): array {
-        $enabledMethods = $this->fetchEnabledMethods();
+        $enabledMethods = $this->db->getEnabledMethods();
         $filteredMethods = $this->filterMethods($enabledMethods);
         $sortedMethods = $this->sortMethods($filteredMethods);
 
         return $sortedMethods;
     }
 
-    private function fetchEnabledMethods(): array {
-        $sql = "
-            SELECT pm.id, pm.name, pm.commission, pm.image_url, pm.pay_url, pm.priority, ps.name AS payment_system_name
-            FROM payment_methods pm
-            LEFT JOIN payment_systems ps ON pm.payment_system_id = ps.id
-            WHERE pm.enabled = 1 AND ps.enabled = 1
-        ";
-        return $this->db->query($sql);
-    }
-
     private function filterMethods(array $methods): array {
         $filteredMethods = [];
+
+        $countrySettings = $this->db->getEnabledMethodCountrySettings($this->countryCode);
+        $customSettings = $this->db->getEnabledMethodCustomSettings();
 
         foreach ($methods as $method) {
             $paymentMethod = new PaymentMethod(
@@ -43,7 +42,7 @@ class PaymentTypeSelector {
                 $method['payment_system_name']
             );
 
-            if ($this->isAvailableInCountry($paymentMethod) && $this->passCustomSettings($paymentMethod)) {
+            if ($this->isAvailableInCountry($paymentMethod, $countrySettings) && $this->passCustomSettings($paymentMethod, $customSettings)) {
                 $filteredMethods[] = $paymentMethod;
             }
         }
@@ -53,36 +52,34 @@ class PaymentTypeSelector {
         return $filteredMethods;
     }
 
-    private function isAvailableInCountry(PaymentMethod $method): bool {
-        $rules = $this->db->query("
-            SELECT * FROM method_country_settings
-            WHERE method_id = ? AND country_code = ?
-        ", [$method->getId(), $this->countryCode]);
+    private function isAvailableInCountry(PaymentMethod $method, array $countrySettings): bool
+    {
+        $rules = array_filter($countrySettings, fn($s) => $s['method_id'] == $method->getId());
 
         if (!$rules) return true;
 
         foreach ($rules as $rule) {
-            if ($rule['mode'] === 'deny') return false;
-            if ($rule['mode'] === 'allow') return true;
+            if ($rule['mode'] === PaymentMethodCountryMode::DENY->value) return false;
+            if ($rule['mode'] === PaymentMethodCountryMode::ALLOW->value) return true;
         }
 
         return false;
     }
 
-    private function passCustomSettings(PaymentMethod $method): bool {
-        $conditionsData = $this->db->query("SELECT condition FROM method_settings WHERE method_id = ?", [$method->getId()]);
-        $conditions = array_column($conditionsData, 'condition');
+    private function passCustomSettings(PaymentMethod $method, array $customSettings): bool {
+        $conditions = array_filter($customSettings, fn($s) => $s['method_id'] == $method->getId());
+        $conditions = array_column($conditions, 'condition');
 
         foreach ($conditions as $cond) {
             switch ($cond) {
                 case 'only_android':
-                    if ($this->userOs !== 'android') return false;
+                    if ($this->userOs !== UserOsTypes::ANDROID->value) return false;
                     break;
                 case 'only_ios':
-                    if ($this->userOs !== 'ios') return false;
+                    if ($this->userOs !== UserOsTypes::IOS->value) return false;
                     break;
                 case 'no_wallet_topup':
-                    if ($this->productType === 'walletRefill') return false;
+                    if ($this->productType === ProductTypes::WALLET_REFILL->value) return false;
                     break;
             }
         }
@@ -115,9 +112,9 @@ class PaymentTypeSelector {
 
     private function addSpainConditions(array $filteredMethods): array
     {
-        if ($this->lang !== 'es' || $this->amount >= 0.3) return $filteredMethods;
+        if ($this->lang !== LangTypes::ES->value || $this->amount >= self::ES_MIN_AMOUNT) return $filteredMethods;
 
-        if ($this->productType === 'reward') {
+        if ($this->productType === ProductTypes::REWARD->value) {
             $filteredMethods = array_filter($filteredMethods, fn($m) => str_contains(strtolower($m->getPaymentSystemName()), 'booknet'));
         } else {
             $filteredMethods = array_filter($filteredMethods, fn($m) => !str_contains(strtolower($m->getName()), 'paypal'));

@@ -7,7 +7,7 @@ DROP TABLE IF EXISTS payment_systems;
 CREATE TABLE payment_systems (
                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                                    name TEXT,
-                                   enabled BOOLEAN DEFAULT 1
+                                   enabled INTEGER DEFAULT 1
 );
 
 -- Payment methods Table
@@ -19,7 +19,7 @@ CREATE TABLE payment_methods (
                                  image_url TEXT,
                                  pay_url TEXT,
                                  priority INTEGER DEFAULT 100,
-                                 enabled BOOLEAN DEFAULT 1,
+                                 enabled INTEGER DEFAULT 1,
                                  FOREIGN KEY (payment_system_id) REFERENCES payment_systems(id)
 );
 
